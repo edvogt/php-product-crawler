@@ -244,7 +244,7 @@ class SiteDiscovery {
     
     private function crawlCategories(): array {
         $urls = [];
-        $categoryUrls = ['/products', '/shop', '/catalog', '/categories'];
+        $categoryUrls = ['', '/products', '/shop', '/catalog', '/categories'];
         
         foreach ($categoryUrls as $path) {
             $url = rtrim($this->baseUrl, '/') . $path;
@@ -276,7 +276,14 @@ class SiteDiscovery {
     }
     
     private function isProductUrl(string $url): bool {
-        $patterns = ['/product/', '/item/', '/p/', '/shop/', '/catalog/'];
+        // Skip common non-product patterns
+        $skipPatterns = ['/blog', '/news', '/about', '/contact', '/login', '/search', '/cart', '/checkout'];
+        foreach ($skipPatterns as $pattern) {
+            if (str_contains(strtolower($url), $pattern)) return false;
+        }
+        
+        // Include product URL patterns
+        $patterns = ['/product/', '/item/', '/p/', '/shop/', '/catalog/', '/av/video/'];
         foreach ($patterns as $pattern) {
             if (str_contains($url, $pattern)) return true;
         }
