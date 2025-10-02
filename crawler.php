@@ -563,7 +563,7 @@ class App {
             }
         }
         
-        $this->exportCsv($results);
+        $this->exportHtml($results);
         Log::info("Export complete: {$this->config->outFile}");
     }
     
@@ -611,25 +611,347 @@ class App {
         return [
             'model' => $model,
             'url' => $url,
+            'score' => $score,
             'description' => $data['description'],
             'short_description' => $data['short_description'],
-            'images' => implode(' ', $data['images'])
+            'images' => $data['images']
         ];
     }
     
-    private function exportCsv(array $results): void {
-        $fp = fopen($this->config->outFile, 'w');
-        foreach ($results as $row) {
-            $line = implode(';', [
-                str_replace(';', '&#59;', $row['model']),
-                str_replace(';', '&#59;', $row['url']),
-                str_replace(';', '&#59;', $row['description']),
-                str_replace(';', '&#59;', $row['short_description']),
-                str_replace(';', '&#59;', $row['images'])
-            ]);
-            fwrite($fp, $line . "\n");
+    private function exportHtml(array $results): void {
+        $html = $this->generateHtml($results);
+        file_put_contents($this->config->outFile, $html);
+    }
+    
+    private function generateHtml(array $results): string {
+        $totalResults = count($results);
+        $timestamp = date('Y-m-d H:i:s');
+        $scoringMode = $this->config->useAi ? 'AI-Powered (GPT-4o-mini)' : 'Rule-Based';
+        $cacheMode = $this->config->force ? 'Force Refresh' : $this->config->cacheHours . ' Hours';
+        $baseUrl = $this->escHtml($this->config->baseUrl);
+        $modelsFile = $this->escHtml($this->config->modelsFile);
+        $outFile = $this->escHtml($this->config->outFile);
+        $scoreThreshold = $this->config->scoreThreshold;
+        
+        $html = <<<HTML
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Product Crawler Results</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 2rem;
+            color: #333;
         }
-        fclose($fp);
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 2rem;
+        }
+        .header h1 {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+            font-weight: 700;
+        }
+        .header p {
+            opacity: 0.9;
+            font-size: 1rem;
+        }
+        .search-args {
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            padding: 1.5rem;
+            margin: 2rem;
+            border-radius: 8px;
+        }
+        .search-args h2 {
+            font-size: 1.2rem;
+            margin-bottom: 1rem;
+            color: #667eea;
+        }
+        .arg-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+        }
+        .arg-item {
+            display: flex;
+            flex-direction: column;
+        }
+        .arg-label {
+            font-size: 0.85rem;
+            color: #6c757d;
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+        .arg-value {
+            font-size: 1rem;
+            color: #333;
+            word-break: break-all;
+        }
+        .summary {
+            background: #e7f3ff;
+            border-left: 4px solid #0066cc;
+            padding: 1.5rem;
+            margin: 0 2rem 2rem 2rem;
+            border-radius: 8px;
+        }
+        .summary h2 {
+            font-size: 1.2rem;
+            color: #0066cc;
+            margin-bottom: 0.5rem;
+        }
+        .summary p {
+            font-size: 1.1rem;
+            color: #333;
+        }
+        .results {
+            padding: 0 2rem 2rem 2rem;
+        }
+        .product-card {
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+        .product-card:hover {
+            box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+            transform: translateY(-2px);
+        }
+        .product-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+        .model-name {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #667eea;
+            margin-bottom: 0.5rem;
+        }
+        .score-badge {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 0.9rem;
+            white-space: nowrap;
+        }
+        .product-url {
+            font-size: 0.9rem;
+            color: #6c757d;
+            margin-bottom: 1rem;
+            word-break: break-all;
+        }
+        .product-url a {
+            color: #0066cc;
+            text-decoration: none;
+        }
+        .product-url a:hover {
+            text-decoration: underline;
+        }
+        .product-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 0.75rem;
+        }
+        .product-description {
+            color: #555;
+            line-height: 1.6;
+            margin-bottom: 1rem;
+        }
+        .images-section {
+            margin-top: 1.5rem;
+        }
+        .images-label {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: #6c757d;
+            margin-bottom: 0.75rem;
+        }
+        .images-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 0.75rem;
+        }
+        .image-item {
+            aspect-ratio: 1;
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid #e0e0e0;
+        }
+        .image-item img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform 0.3s ease;
+        }
+        .image-item:hover img {
+            transform: scale(1.1);
+        }
+        .no-results {
+            text-align: center;
+            padding: 4rem 2rem;
+            color: #6c757d;
+        }
+        .no-results h2 {
+            font-size: 1.5rem;
+            margin-bottom: 0.5rem;
+        }
+        @media (max-width: 768px) {
+            body { padding: 1rem; }
+            .header h1 { font-size: 1.5rem; }
+            .arg-grid { grid-template-columns: 1fr; }
+            .product-header { flex-direction: column; }
+            .images-grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Product Crawler Results</h1>
+            <p>Generated on {$timestamp}</p>
+        </div>
+        
+        <div class="search-args">
+            <h2>Search Parameters</h2>
+            <div class="arg-grid">
+                <div class="arg-item">
+                    <span class="arg-label">Base URL</span>
+                    <span class="arg-value">{$baseUrl}</span>
+                </div>
+                <div class="arg-item">
+                    <span class="arg-label">Models File</span>
+                    <span class="arg-value">{$modelsFile}</span>
+                </div>
+                <div class="arg-item">
+                    <span class="arg-label">Output File</span>
+                    <span class="arg-value">{$outFile}</span>
+                </div>
+                <div class="arg-item">
+                    <span class="arg-label">Scoring Mode</span>
+                    <span class="arg-value">{$scoringMode}</span>
+                </div>
+                <div class="arg-item">
+                    <span class="arg-label">Score Threshold</span>
+                    <span class="arg-value">{$scoreThreshold} / 30</span>
+                </div>
+                <div class="arg-item">
+                    <span class="arg-label">Cache Mode</span>
+                    <span class="arg-value">{$cacheMode}</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="summary">
+            <h2>Results Summary</h2>
+            <p><strong>{$totalResults}</strong> product(s) found matching criteria</p>
+        </div>
+        
+        <div class="results">
+HTML;
+
+        if (empty($results)) {
+            $html .= <<<HTML
+            <div class="no-results">
+                <h2>No Products Found</h2>
+                <p>No products matched the search criteria. Try adjusting your model list or base URL.</p>
+            </div>
+HTML;
+        } else {
+            foreach ($results as $product) {
+                $model = $this->escHtml($product['model']);
+                $url = $this->escHtml($product['url']);
+                $score = $product['score'];
+                $shortDesc = $this->escHtml($product['short_description']);
+                $description = $this->escHtml($product['description']);
+                $images = $product['images'];
+                
+                $html .= <<<HTML
+            <div class="product-card">
+                <div class="product-header">
+                    <div>
+                        <div class="model-name">{$model}</div>
+                        <div class="product-url"><a href="{$url}" target="_blank">{$url}</a></div>
+                    </div>
+                    <div class="score-badge">Score: {$score} / 30</div>
+                </div>
+                
+HTML;
+
+                if ($shortDesc) {
+                    $html .= <<<HTML
+                <div class="product-title">{$shortDesc}</div>
+HTML;
+                }
+                
+                if ($description) {
+                    $html .= <<<HTML
+                <div class="product-description">{$description}</div>
+HTML;
+                }
+                
+                if (!empty($images)) {
+                    $html .= <<<HTML
+                <div class="images-section">
+                    <div class="images-label">Product Images ({$this->escHtml((string)count($images))})</div>
+                    <div class="images-grid">
+HTML;
+                    foreach ($images as $img) {
+                        $imgUrl = $this->escHtml($img);
+                        $html .= <<<HTML
+                        <div class="image-item">
+                            <img src="{$imgUrl}" alt="{$model}" loading="lazy">
+                        </div>
+HTML;
+                    }
+                    $html .= <<<HTML
+                    </div>
+                </div>
+HTML;
+                }
+                
+                $html .= <<<HTML
+            </div>
+HTML;
+            }
+        }
+        
+        $html .= <<<HTML
+        </div>
+    </div>
+</body>
+</html>
+HTML;
+
+        return $html;
+    }
+    
+    private function escHtml(string $text): string {
+        return htmlspecialchars($text, ENT_QUOTES, 'UTF-8');
     }
 }
 
@@ -647,7 +969,7 @@ if (!isset($options['base']) || !isset($options['models']) || !isset($options['o
     echo "Usage: php crawler.php --base=<url> --models=<file> --out=<file> [--force] [--use-ai]\n";
     echo "  --base    Base URL of the site to crawl\n";
     echo "  --models  File containing model names (one per line)\n";
-    echo "  --out     Output CSV file\n";
+    echo "  --out     Output HTML file\n";
     echo "  --force   Force refresh (bypass cache)\n";
     echo "  --use-ai  Use OpenAI for intelligent page scoring (requires OPENAI_API_KEY in .env)\n";
     exit(1);
