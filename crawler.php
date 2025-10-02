@@ -2,7 +2,7 @@
 <?php
 declare(strict_types=1);
 
-// Product Discovery & Extraction Crawler - PHP 8+ / SQLite / ~600 LOC
+// Product Discovery & Extraction Crawler - PHP 8+ / JSON Cache / ~600 LOC
 
 class Config {
     public function __construct(
@@ -23,47 +23,54 @@ class Log {
 }
 
 class Db {
-    private SQLite3 $db;
+    private string $cachePath;
+    private array $cache;
     
-    public function __construct(string $path = 'discovery_cache.db') {
-        $this->db = new SQLite3($path);
-        $this->db->exec('CREATE TABLE IF NOT EXISTS urls (
-            url TEXT PRIMARY KEY,
-            discovered_at INTEGER,
-            score INTEGER DEFAULT 0
-        )');
+    public function __construct(string $path = 'discovery_cache.json') {
+        $this->cachePath = $path;
+        $this->loadCache();
+    }
+    
+    private function loadCache(): void {
+        if (file_exists($this->cachePath)) {
+            $content = file_get_contents($this->cachePath);
+            $this->cache = json_decode($content, true) ?: [];
+        } else {
+            $this->cache = [];
+        }
+    }
+    
+    private function saveCache(): void {
+        file_put_contents($this->cachePath, json_encode($this->cache, JSON_PRETTY_PRINT));
     }
     
     public function isCached(string $url, int $maxAgeHours): bool {
         $cutoff = time() - ($maxAgeHours * 3600);
-        $stmt = $this->db->prepare('SELECT 1 FROM urls WHERE url = ? AND discovered_at > ?');
-        $stmt->bindValue(1, $url, SQLITE3_TEXT);
-        $stmt->bindValue(2, $cutoff, SQLITE3_INTEGER);
-        return (bool)$stmt->execute()->fetchArray();
+        return isset($this->cache[$url]) && $this->cache[$url]['discovered_at'] > $cutoff;
     }
     
     public function addUrl(string $url, int $score = 0): void {
-        $stmt = $this->db->prepare('INSERT OR REPLACE INTO urls (url, discovered_at, score) VALUES (?, ?, ?)');
-        $stmt->bindValue(1, $url, SQLITE3_TEXT);
-        $stmt->bindValue(2, time(), SQLITE3_INTEGER);
-        $stmt->bindValue(3, $score, SQLITE3_INTEGER);
-        $stmt->execute();
+        $this->cache[$url] = [
+            'discovered_at' => time(),
+            'score' => $score
+        ];
+        $this->saveCache();
     }
     
     public function getCachedUrls(int $maxAgeHours): array {
         $cutoff = time() - ($maxAgeHours * 3600);
-        $stmt = $this->db->prepare('SELECT url FROM urls WHERE discovered_at > ?');
-        $stmt->bindValue(1, $cutoff, SQLITE3_INTEGER);
-        $result = $stmt->execute();
         $urls = [];
-        while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-            $urls[] = $row['url'];
+        foreach ($this->cache as $url => $data) {
+            if ($data['discovered_at'] > $cutoff) {
+                $urls[] = $url;
+            }
         }
         return $urls;
     }
     
     public function clearCache(): void {
-        $this->db->exec('DELETE FROM urls');
+        $this->cache = [];
+        $this->saveCache();
     }
 }
 
