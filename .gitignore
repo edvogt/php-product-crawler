@@ -4,11 +4,9 @@
 vendor/
 composer.lock
 
-# SQLite
-*.db
-*.db-journal
-*.sqlite
-*.sqlite3
+# Cache files
+discovery_cache.json
+*.cache.json
 
 # Output files
 *.csv
