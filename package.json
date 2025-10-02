@@ -1,0 +1,12 @@
+{
+  "name": "php-product-crawler",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "PHP 8+ Product Discovery & Extraction Crawler with SQLite",
+  "keywords": ["php", "crawler", "scraper", "product-discovery", "sqlite"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@octokit/rest": "^22.0.0"
+  }
+}
