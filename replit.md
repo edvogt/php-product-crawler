@@ -1,13 +1,13 @@
 # Product Discovery & Extraction Crawler
 
 ## Overview
-A PHP 8+ product crawler with SQLite caching that discovers products via sitemaps and category pages, scores pages based on content quality, matches model numbers, and exports to semicolon-delimited CSV.
+A PHP 8+ product crawler with JSON file-based caching that discovers products via sitemaps and category pages, scores pages based on content quality, matches model numbers, and exports to semicolon-delimited CSV.
 
 ## Project Architecture
 - **crawler.php**: Single-file implementation (~600 LOC) with OOP classes:
   - Config: Configuration management
   - Log: Console logging
-  - Db: SQLite3 discovery cache with 24-hour expiry
+  - Db: JSON file-based discovery cache with 24-hour expiry (no database required)
   - Http: HTTP client with gzip, redirects, proper User-Agent
   - SiteDiscovery: Dual discovery via sitemaps + category crawling
   - ModelMatcher: Model pattern matching against provided list
@@ -31,7 +31,7 @@ php crawler.php --base=https://example.com --models=models.txt --out=products.cs
 
 ## Features
 - Dual discovery: XML sitemaps + category page crawling
-- SQLite cache reused if < 24 hours old
+- JSON file cache reused if < 24 hours old (no database required)
 - Page scoring with 20+ point threshold (title, specs, images, physical specs, docs, JSON-LD Product, canonical, H1)
 - Advanced image extraction: src, data-src, srcset, picture elements
 - Icon/placeholder filtering, absolute URLs, max 10 images per product
@@ -40,4 +40,5 @@ php crawler.php --base=https://example.com --models=models.txt --out=products.cs
 - Respectful crawling: delays, gzip, redirects, User-Agent
 
 ## Recent Changes
+- 2025-10-02: Replaced SQLite3 with JSON file-based caching (no database extension required)
 - 2025-10-01: Initial implementation with corrected cleanText() regex pattern
