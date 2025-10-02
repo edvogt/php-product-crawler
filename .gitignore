@@ -4,6 +4,9 @@
 vendor/
 composer.lock
 
+# Environment variables
+.env
+
 # Cache files
 discovery_cache.json
 *.cache.json
