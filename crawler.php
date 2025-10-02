@@ -2,7 +2,24 @@
 <?php
 declare(strict_types=1);
 
-// Product Discovery & Extraction Crawler - PHP 8+ / JSON Cache / ~600 LOC
+// Product Discovery & Extraction Crawler - PHP 8+ / JSON Cache + OpenAI / ~700 LOC
+
+function loadEnv(string $path = '.env'): void {
+    if (!file_exists($path)) return;
+    $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    foreach ($lines as $line) {
+        if (str_starts_with(trim($line), '#')) continue;
+        if (strpos($line, '=') !== false) {
+            [$key, $value] = explode('=', $line, 2);
+            $key = trim($key);
+            $value = trim($value, " \t\n\r\0\x0B\"'");
+            if (!array_key_exists($key, $_ENV)) {
+                $_ENV[$key] = $value;
+                putenv("$key=$value");
+            }
+        }
+    }
+}
 
 class Config {
     public function __construct(
@@ -10,6 +27,7 @@ class Config {
         public string $modelsFile,
         public string $outFile,
         public bool $force = false,
+        public bool $useAi = false,
         public int $delay = 1,
         public int $scoreThreshold = 20,
         public int $cacheHours = 24
@@ -95,6 +113,79 @@ class Http {
         curl_close($ch);
         
         return ($code >= 200 && $code < 300) ? ($response ?: null) : null;
+    }
+}
+
+class OpenAI {
+    private string $apiKey;
+    private string $model = 'gpt-4o-mini';
+    
+    public function __construct() {
+        $this->apiKey = $_ENV['OPENAI_API_KEY'] ?? '';
+        if (empty($this->apiKey)) {
+            throw new Exception('OPENAI_API_KEY not found in environment');
+        }
+    }
+    
+    public function scoreProductPage(string $title, string $content): int {
+        $prompt = "Analyze if this is a product page. Score 0-100 based on:\n"
+                . "- Product information present\n"
+                . "- Technical specifications\n"
+                . "- Product images/details\n"
+                . "- Purchase or product-focused content\n\n"
+                . "Title: $title\n\n"
+                . "Content sample: " . substr($content, 0, 1000) . "\n\n"
+                . "Respond with ONLY a number 0-100.";
+        
+        $ch = curl_init('https://api.openai.com/v1/chat/completions');
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST => true,
+            CURLOPT_HTTPHEADER => [
+                'Content-Type: application/json',
+                'Authorization: Bearer ' . $this->apiKey
+            ],
+            CURLOPT_POSTFIELDS => json_encode([
+                'model' => $this->model,
+                'messages' => [
+                    ['role' => 'system', 'content' => 'You are a product page classifier. Respond only with a number 0-100.'],
+                    ['role' => 'user', 'content' => $prompt]
+                ],
+                'temperature' => 0.3,
+                'max_tokens' => 10
+            ])
+        ]);
+        
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        
+        if ($httpCode !== 200 || !$response) {
+            $errorSnippet = substr($response ?: 'no response', 0, 100);
+            throw new Exception("OpenAI API error: HTTP $httpCode - $errorSnippet");
+        }
+        
+        $data = json_decode($response, true);
+        if (!isset($data['choices'][0]['message']['content'])) {
+            $dataSnippet = substr(json_encode($data), 0, 100);
+            throw new Exception("OpenAI response missing content: $dataSnippet");
+        }
+        
+        $scoreText = trim($data['choices'][0]['message']['content']);
+        $filtered = filter_var($scoreText, FILTER_SANITIZE_NUMBER_INT);
+        
+        // Check for empty string (no digits found) or invalid numeric response
+        if ($filtered === '' || $filtered === false) {
+            throw new Exception("OpenAI returned non-numeric response: $scoreText");
+        }
+        
+        $score = (int)$filtered;
+        
+        if ($score < 0 || $score > 100) {
+            throw new Exception("OpenAI score out of range (0-100): $score");
+        }
+        
+        return $score;
     }
 }
 
@@ -213,7 +304,43 @@ class ModelMatcher {
 }
 
 class PageScorer {
+    private ?OpenAI $ai;
+    
+    public function __construct(?OpenAI $ai = null) {
+        $this->ai = $ai;
+    }
+    
     public function score(DOMDocument $dom, DOMXPath $xpath, string $html): int {
+        // Use AI scoring if enabled
+        if ($this->ai !== null) {
+            return $this->scoreWithAI($xpath, $html);
+        }
+        
+        // Fall back to rule-based scoring
+        return $this->scoreRuleBased($xpath, $html);
+    }
+    
+    private function scoreWithAI(DOMXPath $xpath, string $html): int {
+        try {
+            // Extract title
+            $titleNodes = $xpath->query('//title');
+            $title = $titleNodes->length > 0 ? $titleNodes[0]->textContent : '';
+            
+            // Extract text content (remove scripts/styles)
+            $text = strip_tags(preg_replace('/<(script|style)\b[^>]*>.*?<\/\1>/is', '', $html));
+            
+            // Get AI score (0-100)
+            $aiScore = $this->ai->scoreProductPage($title, $text);
+            
+            // Convert to 0-30 range to match rule-based scoring
+            return (int)($aiScore * 0.3);
+        } catch (Exception $e) {
+            Log::warn("AI scoring failed: {$e->getMessage()}, falling back to rules");
+            return $this->scoreRuleBased($xpath, $html);
+        }
+    }
+    
+    private function scoreRuleBased(DOMXPath $xpath, string $html): int {
         $score = 0;
         
         // Title presence (5 points)
@@ -387,7 +514,20 @@ class App {
         $this->db = new Db();
         $this->http = new Http();
         $this->matcher = new ModelMatcher($config->modelsFile);
-        $this->scorer = new PageScorer();
+        
+        // Initialize AI scorer if enabled
+        $ai = null;
+        if ($config->useAi) {
+            try {
+                $ai = new OpenAI();
+                Log::info("OpenAI scoring enabled");
+            } catch (Exception $e) {
+                Log::error("Failed to initialize OpenAI: {$e->getMessage()}");
+                exit(1);
+            }
+        }
+        
+        $this->scorer = new PageScorer($ai);
         $this->extractor = new DataExtractor();
     }
     
@@ -491,14 +631,18 @@ if (php_sapi_name() !== 'cli') {
     die("This script must be run from the command line.\n");
 }
 
-$options = getopt('', ['base:', 'models:', 'out:', 'force']);
+// Load environment variables from .env file
+loadEnv();
+
+$options = getopt('', ['base:', 'models:', 'out:', 'force', 'use-ai']);
 
 if (!isset($options['base']) || !isset($options['models']) || !isset($options['out'])) {
-    echo "Usage: php crawler.php --base=<url> --models=<file> --out=<file> [--force]\n";
+    echo "Usage: php crawler.php --base=<url> --models=<file> --out=<file> [--force] [--use-ai]\n";
     echo "  --base    Base URL of the site to crawl\n";
     echo "  --models  File containing model names (one per line)\n";
     echo "  --out     Output CSV file\n";
     echo "  --force   Force refresh (bypass cache)\n";
+    echo "  --use-ai  Use OpenAI for intelligent page scoring (requires OPENAI_API_KEY in .env)\n";
     exit(1);
 }
 
@@ -506,7 +650,8 @@ $config = new Config(
     baseUrl: $options['base'],
     modelsFile: $options['models'],
     outFile: $options['out'],
-    force: isset($options['force'])
+    force: isset($options['force']),
+    useAi: isset($options['use-ai'])
 );
 
 $app = new App($config);
