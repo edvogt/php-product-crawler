@@ -1,0 +1,22 @@
+# PHP
+*.log
+*.cache
+vendor/
+composer.lock
+
+# SQLite
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Output files
+*.csv
+
+# Node.js
+node_modules/
+package-lock.json
+
+# System
+.DS_Store
+Thumbs.db
